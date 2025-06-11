@@ -20,20 +20,46 @@ const (
 )
 
 const (
-	timeout = 300 * time.Millisecond // Timeout for port scanning
-	maxPort = 1024                   // Maximum port number
+	timeout        = 300 * time.Millisecond // Timeout for port scanning
+	defaultMaxPort = 1024                   // Maximum port number to scan
 )
 
 func main() {
 	var ipNet string
+	var portRange string
 
 	// Check if the program is run with administrator privileges
 	if os.Geteuid() != 0 {
 		fmt.Printf("%s[!] Error: This program requires administrator privileges to run.%s\n", ColorRed, ColorReset)
 	}
 
-	fmt.Printf("%s[*]%s Enter the CIDR notation of the network to scan (e.g., 192.168.0.0/24): ", ColorCyan, ColorReset)
-	fmt.Scan(&ipNet)
+	// Get the arguments from the command line
+	if len(os.Args) < 3 {
+		fmt.Printf("%s[!] Error: No CIDR notation or port range provided. Usage: %s -d <CIDR notation> -p <port range>%s\n", ColorRed, os.Args[0], ColorReset)
+		return
+	}
+
+	// Parse arguments
+	for i := 1; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "-d":
+			if i+1 < len(os.Args) {
+				ipNet = os.Args[i+1]
+				i++
+			} else {
+				fmt.Printf("%s[!] Error: No CIDR notation provided after -d.%s\n", ColorRed, ColorReset)
+				return
+			}
+		case "-p":
+			if i+1 < len(os.Args) {
+				portRange = os.Args[i+1]
+				i++
+			} else {
+				fmt.Printf("%s[!] Error: No port range provided after -p.%s\n", ColorRed, ColorReset)
+				return
+			}
+		}
+	}
 
 	// Parse the CIDR notation
 	_, network, err := net.ParseCIDR(ipNet)
@@ -45,25 +71,46 @@ func main() {
 	fmt.Printf("%s[*]%s Starting...\n", ColorCyan, ColorReset)
 	fmt.Printf("%s[*]%s Scanning for hosts in the network: %s\n", ColorCyan, ColorReset, network)
 
+	// Parse port range
+	var startPort, endPort int
+	if portRange != "" {
+		n, err := fmt.Sscanf(portRange, "%d-%d", &startPort, &endPort)
+		if n == 2 && err == nil && startPort >= 1 && endPort <= defaultMaxPort && startPort <= endPort {
+			// Valid range, do nothing
+		} else {
+			// Try single port
+			n, err := fmt.Sscanf(portRange, "%d", &startPort)
+			if n == 1 && err == nil && startPort >= 1 && startPort <= defaultMaxPort {
+				endPort = startPort
+			} else {
+				fmt.Printf("%s[!] Error: Invalid port range.%s\n", ColorRed, ColorReset)
+				return
+			}
+		}
+	} else {
+		startPort, endPort = 1, defaultMaxPort
+	}
+
 	// Scan for alive hosts
 	chosenIP, err := scanNetworkConcurrently(network)
 	if err != nil {
 		fmt.Printf("%s[!] Error: %s%s\n", ColorRed, err, ColorReset)
+		fmt.Printf("%s[!]%s Exiting...\n", ColorRed, ColorReset)
 		return
 	}
 
 	// Scan for open ports on the chosen host
-	fmt.Printf("%s[*]%s Scanning host: %s for open ports...\n", ColorCyan, ColorReset, chosenIP)
-	portScanner(chosenIP)
+	fmt.Printf("%s[*]%s Scanning host: %s for open ports in range %d-%d...\n", ColorCyan, ColorReset, chosenIP, startPort, endPort)
+	portScanner(chosenIP, startPort, endPort)
 	fmt.Printf("%s[*]%s Scan completed.\n", ColorCyan, ColorReset)
 }
 
-func portScanner(hostname string) {
+func portScanner(hostname string, startPort, endPort int) {
 	var wg sync.WaitGroup
-	results := make(chan int, maxPort) // Buffered channel to hold open ports
+	results := make(chan int, endPort-startPort+1) // Buffered channel to hold open ports
 
 	// Start scanning ports concurrently
-	for port := 1; port <= maxPort; port++ {
+	for port := startPort; port <= endPort; port++ {
 		wg.Add(1)
 		go scanPorts(&wg, "tcp", hostname, port, timeout, results)
 	}
@@ -139,16 +186,15 @@ func scanNetworkConcurrently(network *net.IPNet) (string, error) {
 	// List all alive hosts with numbers
 	fmt.Println("\n=====================================")
 	for i, host := range aliveHosts {
-		fmt.Printf("(%d) %s\n", i+1, host)
+		fmt.Printf("%s(%d)%s %s\n", ColorCyan, i+1, ColorReset, host)
 	}
-	fmt.Print("=====================================\n")
+	fmt.Print("=====================================\n\n")
 
 	// Prompt user to choose a host
 	var choice int
 	fmt.Printf("%sSelect number> %s", ColorBlue, ColorReset)
 	_, err := fmt.Scan(&choice)
 	if err != nil || choice < 1 || choice > len(aliveHosts) {
-		fmt.Printf("%s[!] Error: Invalid choice. Exiting...%s\n", ColorRed, ColorReset)
 		return "", fmt.Errorf("invalid choice")
 	}
 
