@@ -104,7 +104,7 @@ func main() {
 	// Scan for open ports on the chosen host or domain
 	fmt.Printf("%s[*]%s Scanning host/domain: %s for open ports in range %d-%d...\n", ColorCyan, ColorReset, chosenIP, startPort, endPort)
 	portScanner(chosenIP, startPort, endPort)
-	fmt.Printf("%s[*]%s Scan completed.\n", ColorCyan, ColorReset)
+	fmt.Printf("%s[*]%s Scan completed\n", ColorCyan, ColorReset)
 
 	// Exit message
 	var null string
@@ -210,7 +210,7 @@ func portScanner(hostname string, startPort, endPort int) {
 		if svc, exists := commonServices[port]; exists {
 			service = svc
 		}
-		fmt.Printf("%s[+]%s Open port found: %d (%s)\n", ColorGreen, ColorReset, port, service)
+		fmt.Printf("%s[+]%s Open port found: %d\t(%s)\n", ColorGreen, ColorReset, port, service)
 	}
 }
 
