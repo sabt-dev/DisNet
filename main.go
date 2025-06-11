@@ -21,9 +21,9 @@ const (
 )
 
 const (
-	timeout          = 300 * time.Millisecond // Timeout for port scanning
-	defaultRangePort = 1024                   // Maximum port number to scan
-	defaultMaxPort   = 65535                  // Maximum port number for user input validation
+	timeout          = 1000 * time.Millisecond // Timeout for port scanning
+	defaultRangePort = 1024                    // Maximum port number to scan
+	defaultMaxPort   = 65535                   // Maximum port number for user input validation
 )
 
 func main() {
@@ -35,21 +35,50 @@ func main() {
 		fmt.Printf("%s[!] Error: This program requires administrator privileges to run.%s\n", ColorRed, ColorReset)
 	}
 
-	// Prompt user for CIDR notation and port range
-	fmt.Printf("Enter CIDR notation (e.g., 192.168.0.0/24): ")
+	// Prompt user for CIDR notation, host, or domain and port range
+	fmt.Printf("Enter CIDR notation, host, or domain (e.g., 192.168.0.0/24 or example.com): ")
 	fmt.Scan(&ipNet)
 	fmt.Printf("Enter port range (e.g., 20-80 or single port): ")
 	fmt.Scan(&portRange)
 
-	// Parse the CIDR notation
-	_, network, err := net.ParseCIDR(ipNet)
-	if err != nil {
-		fmt.Printf("%s[!] Error: Invalid CIDR notation.%s\n", ColorRed, ColorReset)
-		return
+	// Check if input is CIDR notation, host, or domain
+	var network *net.IPNet
+	var isCIDR, isDomain bool
+	var err error
+	if _, network, err = net.ParseCIDR(ipNet); err == nil {
+		isCIDR = true
+	} else if net.ParseIP(ipNet) == nil {
+		isDomain = true
 	}
 
 	fmt.Printf("%s[*]%s Starting...\n", ColorCyan, ColorReset)
-	fmt.Printf("%s[*]%s Scanning for hosts in the network: %s\n", ColorCyan, ColorReset, network)
+
+	var chosenIP string
+	if isCIDR {
+		fmt.Printf("%s[*]%s Scanning for hosts in the network: %s\n", ColorCyan, ColorReset, network)
+		chosenIP, err = scanNetworkConcurrently(network)
+		if err != nil {
+			fmt.Printf("%s[!] Error: %s%s\n", ColorRed, err, ColorReset)
+			fmt.Printf("%s[!]%s Exiting...\n", ColorRed, ColorReset)
+			return
+		}
+	} else if isDomain {
+		fmt.Printf("%s[*]%s Skipping host discovery and proceeding to port scanning for domain: %s\n", ColorCyan, ColorReset, ipNet)
+		chosenIP = ipNet
+	} else {
+		fmt.Printf("%s[*]%s Skipping host discovery and proceeding to port scanning for host: %s\n", ColorCyan, ColorReset, ipNet)
+		chosenIP = ipNet
+	}
+
+	// Check if the chosen IP is private or public
+	parsedIP := net.ParseIP(chosenIP)
+	if parsedIP != nil {
+		if isPrivateIP(parsedIP) {
+			fmt.Printf("%s[*]%s The IP address %s is private.%s\n", ColorCyan, ColorReset, chosenIP, ColorReset)
+		} else {
+			fmt.Printf("%s[*]%s The IP address %s is public.%s\n", ColorCyan, ColorReset, chosenIP, ColorReset)
+		}
+	}
 
 	// Parse port range
 	var startPort, endPort int
@@ -72,16 +101,8 @@ func main() {
 		startPort, endPort = 1, defaultRangePort
 	}
 
-	// Scan for alive hosts
-	chosenIP, err := scanNetworkConcurrently(network)
-	if err != nil {
-		fmt.Printf("%s[!] Error: %s%s\n", ColorRed, err, ColorReset)
-		fmt.Printf("%s[!]%s Exiting...\n", ColorRed, ColorReset)
-		return
-	}
-
-	// Scan for open ports on the chosen host
-	fmt.Printf("%s[*]%s Scanning host: %s for open ports in range %d-%d...\n", ColorCyan, ColorReset, chosenIP, startPort, endPort)
+	// Scan for open ports on the chosen host or domain
+	fmt.Printf("%s[*]%s Scanning host/domain: %s for open ports in range %d-%d...\n", ColorCyan, ColorReset, chosenIP, startPort, endPort)
 	portScanner(chosenIP, startPort, endPort)
 	fmt.Printf("%s[*]%s Scan completed.\n", ColorCyan, ColorReset)
 
@@ -94,6 +115,82 @@ func main() {
 func portScanner(hostname string, startPort, endPort int) {
 	var wg sync.WaitGroup
 	results := make(chan int, endPort-startPort+1) // Buffered channel to hold open ports
+
+	// Predefined mapping of common ports to services
+	commonServices := map[int]string{
+		20:    "FTP Data",
+		21:    "FTP",
+		22:    "SSH",
+		23:    "Telnet",
+		25:    "SMTP",
+		53:    "DNS",
+		67:    "DHCP Server",
+		68:    "DHCP Client",
+		69:    "TFTP",
+		80:    "HTTP",
+		110:   "POP3",
+		111:   "RPCbind",
+		119:   "NNTP",
+		123:   "NTP",
+		135:   "MS RPC",
+		137:   "NetBIOS Name",
+		138:   "NetBIOS Datagram",
+		139:   "NetBIOS Session",
+		143:   "IMAP",
+		161:   "SNMP",
+		162:   "SNMP Trap",
+		179:   "BGP",
+		389:   "LDAP",
+		443:   "HTTPS",
+		445:   "Microsoft-DS",
+		465:   "SMTPS",
+		514:   "Syslog",
+		515:   "LPD",
+		520:   "RIP",
+		587:   "SMTP Submission",
+		631:   "IPP",
+		636:   "LDAPS",
+		993:   "IMAPS",
+		995:   "POP3S",
+		1080:  "SOCKS Proxy",
+		1433:  "MSSQL",
+		1521:  "Oracle DB",
+		1723:  "PPTP",
+		2049:  "NFS",
+		2082:  "cPanel",
+		2083:  "cPanel SSL",
+		2181:  "Zookeeper",
+		2375:  "Docker",
+		2376:  "Docker SSL",
+		3306:  "MySQL",
+		3389:  "RDP",
+		3690:  "Subversion",
+		4000:  "ICQ",
+		4040:  "HTTP Proxy",
+		4369:  "Erlang Port Mapper",
+		5000:  "UPnP",
+		5432:  "PostgreSQL",
+		5631:  "pcAnywhere",
+		5900:  "VNC",
+		5984:  "CouchDB",
+		6379:  "Redis",
+		6667:  "IRC",
+		7001:  "WebLogic",
+		8000:  "HTTP Alt",
+		8008:  "HTTP Alt",
+		8080:  "HTTP Proxy",
+		8081:  "HTTP Alt",
+		8443:  "HTTPS Alt",
+		8888:  "HTTP Alt",
+		9000:  "SonarQube",
+		9200:  "Elasticsearch",
+		9300:  "Elasticsearch",
+		11211: "Memcached",
+		27017: "MongoDB",
+		27018: "MongoDB",
+		27019: "MongoDB",
+		50000: "SAP",
+	}
 
 	// Start scanning ports concurrently
 	for port := startPort; port <= endPort; port++ {
@@ -109,7 +206,11 @@ func portScanner(hostname string, startPort, endPort int) {
 
 	// Collect results
 	for port := range results {
-		fmt.Printf("%s[+]%s Open port found: %d\n", ColorGreen, ColorReset, port)
+		service := "Unknown"
+		if svc, exists := commonServices[port]; exists {
+			service = svc
+		}
+		fmt.Printf("%s[+]%s Open port found: %d (%s)\n", ColorGreen, ColorReset, port, service)
 	}
 }
 
@@ -185,4 +286,22 @@ func scanNetworkConcurrently(network *net.IPNet) (string, error) {
 	}
 
 	return aliveHosts[choice-1], nil
+}
+
+func isPrivateIP(ip net.IP) bool {
+	privateBlocks := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",    // Loopback
+		"169.254.0.0/16", // Link-local
+	}
+
+	for _, block := range privateBlocks {
+		_, cidr, _ := net.ParseCIDR(block)
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
