@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,8 +21,9 @@ const (
 )
 
 const (
-	timeout        = 300 * time.Millisecond // Timeout for port scanning
-	defaultMaxPort = 1024                   // Maximum port number to scan
+	timeout          = 300 * time.Millisecond // Timeout for port scanning
+	defaultRangePort = 1024                   // Maximum port number to scan
+	defaultMaxPort   = 65535                  // Maximum port number for user input validation
 )
 
 func main() {
@@ -33,33 +35,11 @@ func main() {
 		fmt.Printf("%s[!] Error: This program requires administrator privileges to run.%s\n", ColorRed, ColorReset)
 	}
 
-	// Get the arguments from the command line
-	if len(os.Args) < 3 {
-		fmt.Printf("%s[!] Error: No CIDR notation or port range provided. Usage: %s -d <CIDR notation> -p <port range>%s\n", ColorRed, os.Args[0], ColorReset)
-		return
-	}
-
-	// Parse arguments
-	for i := 1; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "-d":
-			if i+1 < len(os.Args) {
-				ipNet = os.Args[i+1]
-				i++
-			} else {
-				fmt.Printf("%s[!] Error: No CIDR notation provided after -d.%s\n", ColorRed, ColorReset)
-				return
-			}
-		case "-p":
-			if i+1 < len(os.Args) {
-				portRange = os.Args[i+1]
-				i++
-			} else {
-				fmt.Printf("%s[!] Error: No port range provided after -p.%s\n", ColorRed, ColorReset)
-				return
-			}
-		}
-	}
+	// Prompt user for CIDR notation and port range
+	fmt.Printf("Enter CIDR notation (e.g., 192.168.0.0/24): ")
+	fmt.Scan(&ipNet)
+	fmt.Printf("Enter port range (e.g., 20-80 or single port): ")
+	fmt.Scan(&portRange)
 
 	// Parse the CIDR notation
 	_, network, err := net.ParseCIDR(ipNet)
@@ -74,21 +54,22 @@ func main() {
 	// Parse port range
 	var startPort, endPort int
 	if portRange != "" {
-		n, err := fmt.Sscanf(portRange, "%d-%d", &startPort, &endPort)
-		if n == 2 && err == nil && startPort >= 1 && endPort <= defaultMaxPort && startPort <= endPort {
-			// Valid range, do nothing
-		} else {
-			// Try single port
-			n, err := fmt.Sscanf(portRange, "%d", &startPort)
-			if n == 1 && err == nil && startPort >= 1 && startPort <= defaultMaxPort {
-				endPort = startPort
-			} else {
+		if strings.Contains(portRange, "-") {
+			n, err := fmt.Sscanf(portRange, "%d-%d", &startPort, &endPort)
+			if n != 2 || err != nil || startPort < 1 || endPort > defaultMaxPort || startPort > endPort {
 				fmt.Printf("%s[!] Error: Invalid port range.%s\n", ColorRed, ColorReset)
 				return
 			}
+		} else {
+			n, err := fmt.Sscanf(portRange, "%d", &startPort)
+			if n != 1 || err != nil || startPort < 1 || startPort > defaultMaxPort {
+				fmt.Printf("%s[!] Error: Invalid port range.%s\n", ColorRed, ColorReset)
+				return
+			}
+			endPort = startPort
 		}
 	} else {
-		startPort, endPort = 1, defaultMaxPort
+		startPort, endPort = 1, defaultRangePort
 	}
 
 	// Scan for alive hosts
@@ -103,6 +84,11 @@ func main() {
 	fmt.Printf("%s[*]%s Scanning host: %s for open ports in range %d-%d...\n", ColorCyan, ColorReset, chosenIP, startPort, endPort)
 	portScanner(chosenIP, startPort, endPort)
 	fmt.Printf("%s[*]%s Scan completed.\n", ColorCyan, ColorReset)
+
+	// Exit message
+	var null string
+	fmt.Printf("%sPress Enter to exit...%s\n", ColorYellow, ColorReset)
+	_, _ = fmt.Scan(&null) // Wait for user input before exiting
 }
 
 func portScanner(hostname string, startPort, endPort int) {
